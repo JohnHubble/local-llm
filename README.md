@@ -1,6 +1,6 @@
 # local-llm
 
-**Run local MLX models as OpenAI-compatible subagents on Apple Silicon.**
+**Run local MLX models as OpenAI-compatible subagents on Apple Silicon. Built for Claude Code.**
 
 One server at a time on `:8080`. Swap models with a single command. OpenAI-compatible API so anything that talks to `gpt-4o` already talks to your local model.
 
