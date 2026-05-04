@@ -48,7 +48,47 @@ Four "kinds" are wired in. Each one auto-downloads from Hugging Face on first `s
 
 Only one is loaded at a time. Swap takes ~5–10 s once the model is cached locally.
 
-To pick a different model, edit `bin/local-llm` — the `model_for()` function is the only place model IDs live. Anything from `mlx-community/*` on Hugging Face will work; multimodal models go through `mlx_vlm.server`, text-only through `mlx_lm.server`.
+The defaults are tuned for **16 GB RAM**. If you have more, see the next section.
+
+## Scaling up — bigger models on 32 GB / 64 GB / 96 GB+
+
+The defaults leave a lot on the table on bigger machines. With more unified memory you can move up to 32B or 70B class models, which are meaningfully smarter than the 4B/7B defaults — especially at coding, vision, and long-context reasoning.
+
+**Resident-memory rules of thumb (4-bit MLX):**
+
+| Model size | 4-bit RAM | 8-bit RAM | Fits on |
+|---|---|---|---|
+| 7–8 B | ~5 GB | ~9 GB | 16 GB |
+| 14 B | ~9 GB | ~16 GB | 24 GB+ |
+| 32 B | ~19 GB | ~34 GB | 32 GB+ (4-bit) / 48 GB+ (8-bit) |
+| 70–72 B | ~42 GB | ~75 GB | 64 GB+ (4-bit) / 96 GB+ (8-bit) |
+
+Add ~2–4 GB for KV cache at long contexts, and leave at least 8 GB headroom for the OS and apps. On a 64 GB MacBook Pro that means 32B at 8-bit (high quality) or 70B at 4-bit (more capability) are both realistic — pick one to keep resident, swap as needed.
+
+**Recommended upgrades (drop-in: edit `bin/local-llm` `model_for()` and change the model IDs):**
+
+| Default (16 GB) | Step up (32 GB) | Top end (64 GB) |
+|---|---|---|
+| `daily` Qwen3-4B | Qwen3-14B-4bit (~9 GB) | Qwen3-32B-4bit (~19 GB) or Qwen2.5-72B-Instruct-4bit (~42 GB) |
+| `code` Qwen2.5-Coder-7B | Qwen2.5-Coder-14B-Instruct-4bit (~9 GB) | Qwen2.5-Coder-32B-Instruct-4bit (~19 GB) — big quality jump |
+| `vision` Qwen2.5-VL-7B | Qwen2.5-VL-32B-Instruct-4bit (~19 GB) | Qwen2.5-VL-72B-Instruct-4bit (~42 GB) |
+
+**Specialty picks worth trying on 64 GB:**
+
+- **Reasoning / chain-of-thought:** `mlx-community/QwQ-32B-4bit` or `mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit` — slow but strong on math and multi-step problems.
+- **Long context:** Qwen2.5-Coder-32B has 128K context; useful for "read this whole codebase" tasks.
+- **Higher precision instead of bigger params:** swap `*-4bit` for `*-8bit` (where available) on the same model. 8-bit is usually a notable quality bump for the same model — especially on coding tasks. Qwen2.5-Coder-32B-Instruct in 8-bit (~34 GB) is excellent on a 64 GB machine.
+
+**Where to find them:** browse [huggingface.co/mlx-community](https://huggingface.co/mlx-community) — the `mlx-community` org keeps pre-quantized MLX builds of most popular open models. Look for `*-4bit` or `*-8bit` suffixes. Multimodal models (vision, audio) go through `mlx_vlm.server` (already wired in for `vision`/`gemma` kinds); text-only models go through `mlx_lm.server`.
+
+**How to evaluate which is better for you:**
+
+1. Add a new kind to `bin/local-llm` (e.g., `daily-big` -> `Qwen3-32B-4bit`).
+2. Run the same prompt on the small and big version: `local-llm switch daily && local-llm prompt "..."`, then `local-llm switch daily-big && local-llm prompt "..."`.
+3. Compare on your real workload — code review, summarization of your actual docs, vision tasks on your actual screenshots — not on benchmarks.
+4. Watch tokens/sec via the server log (`/tmp/local-llm.log`). The 4B class runs at 30–60 tok/s on M-series; 32B class drops to 8–15 tok/s; 72B class to 3–6 tok/s. The right pick is the largest model that's still fast enough for the loop you're actually in.
+
+**What still doesn't fit on 64 GB:** full-precision (FP16) versions of any 32B+ model, and 4-bit versions of 100B+ models (Llama 3.1 405B, DeepSeek-V3 671B). For those you need 128 GB+ or split inference across machines.
 
 ## Usage
 
