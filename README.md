@@ -12,7 +12,7 @@ Coding agents like Claude Code are excellent at high-leverage work — architect
 
 `local-llm` is the thinnest possible orchestrator over MLX so a coding agent can offload that work to a small local model with one Bash call. No model registry to manage, no GUI, no daemon you have to remember is running. One stable endpoint, one resident model at a time, swap on demand.
 
-If you're already happy with Ollama or LM Studio, this isn't going to change your life. If you're driving a coding agent on a Mac and want a "cheap labor" model it can dispatch to without you babysitting, this is the right shape.
+If you're already happy with Ollama or LM Studio, this isn't going to change your life. If you're driving a coding agent on a Mac and want a local helper model it can dispatch to without you babysitting, this is the right shape.
 
 ## Works with
 
@@ -74,11 +74,35 @@ curl -sS http://127.0.0.1:8080/v1/chat/completions \
 
 ## Requirements
 
-- **Apple Silicon Mac** (M1/M2/M3/M4) — MLX is Apple-Silicon-only; will not run on Intel
+- **Apple Silicon Mac** (M1/M2/M3/M4/M5) — MLX is Apple-Silicon-only; will not run on Intel
 - **macOS 13+**
 - **Python 3.10+** (`brew install python@3.12` if you only have macOS's stale 3.9)
 - **16 GB RAM** for the default 7B models; 8 GB works if you stick to the 4B kinds
 - **~15 GB free disk** if you download all four default models
+
+## Known tested on
+
+Last verified by the maintainer. If your setup is close to this, install should be smooth; further away, expect to debug.
+
+| | |
+|---|---|
+| macOS | 26.4.1 (Tahoe) |
+| Chip | Apple M5 |
+| RAM | 16 GB |
+| Python | 3.12.13 |
+| `mlx-lm` | 0.31.3 |
+| `mlx-vlm` | 0.4.4 |
+| `torch` | 2.11.0 |
+| Tested | 2026-05-04 |
+
+Versions are pinned in `requirements.txt`. Earlier Apple Silicon (M1/M2/M3/M4) and macOS 13+ should work fine; the install script does not assume a specific chip generation.
+
+## Security and privacy
+
+- **Models run entirely on your machine.** No prompts or responses are sent to any remote service at inference time.
+- **The server binds to `127.0.0.1` only** — not reachable from your LAN. If you want to expose it, set `LOCAL_LLM_HOST=0.0.0.0` and add your own auth in front (this isn't recommended).
+- **First-time `switch` downloads model weights from Hugging Face** (`huggingface.co/mlx-community/...`). After that the model is cached locally at `~/.cache/huggingface/hub/` and runs offline.
+- **No telemetry.** This wrapper makes no outbound network calls beyond what `mlx-lm`/`mlx-vlm` make to fetch weights, and what the local OpenAI-compatible client makes to `127.0.0.1:8080`.
 
 ## Install
 

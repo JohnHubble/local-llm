@@ -1,0 +1,7 @@
+# Pinned to known-working versions (see "Known Tested On" in README).
+# To update: bump these, re-run install.sh in a clean venv, smoke-test daily/code/vision.
+mlx-lm==0.31.3
+mlx-vlm==0.4.4
+torch==2.11.0
+torchvision==0.26.0
+pillow==12.2.0

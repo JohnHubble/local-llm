@@ -48,13 +48,11 @@ fi
 PIP="$ROOT/venv/bin/pip"
 "$PIP" install --upgrade --quiet pip
 
-# 3. Install deps.
-# mlx-lm: text models (Qwen3-4B daily, Qwen2.5-Coder-7B coding)
-# mlx-vlm: multimodal models (Qwen2.5-VL-7B vision, Gemma 3 4B)
-# torch + torchvision: required by mlx-vlm's image processor (CPU-only is fine; macOS arm64 wheel is ~150MB)
-# pillow: for the test-image example in README
-echo "installing python deps (mlx-lm, mlx-vlm, torch, torchvision, pillow)..."
-"$PIP" install --quiet mlx-lm mlx-vlm torch torchvision pillow
+# 3. Install deps from pinned requirements.txt.
+# Versions are pinned to a known-working set; see "Known Tested On" in README.
+# To intentionally upgrade, bump versions in requirements.txt and re-run.
+echo "installing python deps from requirements.txt..."
+"$PIP" install --quiet -r "$ROOT/requirements.txt"
 
 # 4. Make wrapper executable.
 chmod +x "$ROOT/bin/local-llm"
