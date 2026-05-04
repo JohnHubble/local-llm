@@ -54,7 +54,14 @@ server_kind() {
 }
 
 is_running() {
-  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+  [[ -f "$PID_FILE" ]] || return 1
+  local pid
+  pid=$(cat "$PID_FILE")
+  kill -0 "$pid" 2>/dev/null || return 1
+  # PIDs get recycled by the OS. Verify this process is actually one of our
+  # mlx servers before trusting state files — otherwise `stop` could kill
+  # an unrelated process that happened to inherit the same PID number.
+  ps -p "$pid" -o args= 2>/dev/null | grep -qE 'mlx_(lm|vlm)'
 }
 
 stop_server() {
