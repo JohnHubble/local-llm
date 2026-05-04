@@ -47,7 +47,23 @@ Use `daily` for general tasks, `code` for code, `vision` for OCR/screenshots.
 Don't dispatch decision-quality work — keep that for yourself.
 ```
 
-### Codex / Cursor / Continue / any OpenAI-compatible client
+### Codex
+
+Use `local-llm` from an interactive terminal/PTY inside Codex. The server is a background process; one-off non-interactive commands may clean it up as soon as `switch` exits.
+
+Working pattern:
+
+```bash
+local-llm switch daily
+local-llm prompt "Summarize this log in five bullets: ..."
+local-llm stop
+```
+
+If `switch` prints `ready at http://127.0.0.1:8080` but the next command says `no server running`, you are not in an interactive terminal/PTY. Open an interactive shell in Codex and run the commands there, or use a normal macOS terminal.
+
+MLX also needs access to Apple's Metal GPU. If you see `No Metal device available`, the current agent/sandbox/session cannot access Metal; run from a normal terminal or a Codex session that grants local command access to the process.
+
+### Cursor / Continue / any OpenAI-compatible client
 
 Point the base URL at `http://127.0.0.1:8080/v1` and use `mlx-community/...` as the model name (whatever's currently loaded — `local-llm status` will tell you).
 
