@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# local-llm — minimal MLX subagent dispatcher.
+# One server at a time on :8080. State in /tmp/local-llm.*.
+#
+# Usage:
+#   local-llm switch {daily|code|vision|gemma}   # load (or swap to) a model
+#   local-llm prompt "<text>"                    # chat completion
+#   local-llm prompt-image <img> "<text>"        # vision (after: switch vision|gemma)
+#   local-llm status                             # show what's loaded
+#   local-llm stop                               # kill running server
+#   local-llm models                             # list known kinds
+
+set -euo pipefail
+
+# Resolve repo root from this script's location, then the venv inside it.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+done
+LLM_HOME="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+VENV="${LOCAL_LLM_VENV:-$LLM_HOME/venv}"
+PY="$VENV/bin/python"
+
+if [[ ! -x "$PY" ]]; then
+  echo "no venv at $VENV — run install.sh from $LLM_HOME first" >&2
+  exit 1
+fi
+
+PORT="${LOCAL_LLM_PORT:-8080}"
+HOST="${LOCAL_LLM_HOST:-127.0.0.1}"
+PID_FILE=/tmp/local-llm.pid
+KIND_FILE=/tmp/local-llm.kind
+MODEL_FILE=/tmp/local-llm.model
+LOG_FILE=/tmp/local-llm.log
+
+# kind -> model id
+model_for() {
+  case "$1" in
+    daily)  echo "mlx-community/Qwen3-4B-Instruct-2507-4bit" ;;
+    code)   echo "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit" ;;
+    vision) echo "mlx-community/Qwen2.5-VL-7B-Instruct-4bit" ;;
+    gemma)  echo "mlx-community/gemma-3-4b-it-4bit" ;;
+    *) return 1 ;;
+  esac
+}
+
+# kind -> server module ("text" or "vision"). gemma is multimodal -> vision server.
+server_kind() {
+  case "$1" in
+    daily|code)    echo text ;;
+    vision|gemma)  echo vision ;;
+    *) return 1 ;;
+  esac
+}
+
+is_running() {
+  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+stop_server() {
+  if is_running; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    for _ in {1..10}; do
+      kill -0 "$(cat "$PID_FILE")" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE" "$KIND_FILE" "$MODEL_FILE"
+}
+
+wait_ready() {
+  local deadline=$(( $(date +%s) + 90 ))
+  while (( $(date +%s) < deadline )); do
+    if curl -sf "http://$HOST:$PORT/v1/models" >/dev/null 2>&1; then return 0; fi
+    if curl -sf "http://$HOST:$PORT/health"   >/dev/null 2>&1; then return 0; fi
+    if ! is_running; then
+      echo "server died; tail of log:" >&2
+      tail -20 "$LOG_FILE" >&2 || true
+      return 1
+    fi
+    sleep 0.5
+  done
+  echo "timeout waiting for server" >&2
+  return 1
+}
+
+cmd_switch() {
+  local kind="${1:-}"
+  local model; model=$(model_for "$kind") || { echo "unknown kind: $kind"; exit 2; }
+  local sk; sk=$(server_kind "$kind")
+
+  if is_running && [[ "$(cat "$KIND_FILE" 2>/dev/null)" == "$kind" ]]; then
+    echo "already loaded: $kind ($model)"; return 0
+  fi
+
+  stop_server
+
+  echo "starting $kind: $model"
+  : > "$LOG_FILE"
+  if [[ "$sk" == text ]]; then
+    nohup "$PY" -m mlx_lm server \
+      --model "$model" --host "$HOST" --port "$PORT" \
+      >>"$LOG_FILE" 2>&1 &
+  else
+    nohup "$PY" -m mlx_vlm.server \
+      --model "$model" --host "$HOST" --port "$PORT" \
+      >>"$LOG_FILE" 2>&1 &
+  fi
+  echo $! > "$PID_FILE"
+  echo "$kind"  > "$KIND_FILE"
+  echo "$model" > "$MODEL_FILE"
+
+  if wait_ready; then
+    echo "ready at http://$HOST:$PORT"
+  else
+    stop_server
+    exit 1
+  fi
+}
+
+cmd_prompt() {
+  local text="${1:-}"
+  if [[ -z "$text" ]]; then echo "usage: local-llm prompt \"...\""; exit 2; fi
+  if ! is_running; then echo "no server running; try: local-llm switch daily"; exit 1; fi
+  local model; model=$(cat "$MODEL_FILE")
+  local payload
+  payload=$(MODEL="$model" TEXT="$text" "$PY" -c '
+import json, os
+print(json.dumps({
+  "model": os.environ["MODEL"],
+  "messages": [{"role":"user","content": os.environ["TEXT"]}],
+  "max_tokens": 800,
+  "temperature": 0.3,
+}))')
+  curl -sS -H "Content-Type: application/json" \
+    -d "$payload" "http://$HOST:$PORT/v1/chat/completions" \
+    | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["choices"][0]["message"]["content"])'
+}
+
+cmd_prompt_image() {
+  local img="${1:-}"; local text="${2:-}"
+  if [[ -z "$img" || -z "$text" ]]; then echo "usage: local-llm prompt-image <path> \"...\""; exit 2; fi
+  if ! is_running; then echo "no server running; try: local-llm switch vision"; exit 1; fi
+  local cur_kind; cur_kind=$(cat "$KIND_FILE" 2>/dev/null || echo "")
+  if [[ "$(server_kind "$cur_kind" 2>/dev/null)" != "vision" ]]; then
+    echo "current kind is $cur_kind — switch to a multimodal kind (vision|gemma) first"; exit 1
+  fi
+  local model; model=$(cat "$MODEL_FILE")
+  local payload
+  payload=$(MODEL="$model" IMG="$img" TEXT="$text" "$PY" -c '
+import os, json, base64, mimetypes, pathlib
+p = pathlib.Path(os.environ["IMG"])
+mime = mimetypes.guess_type(p.name)[0] or "image/png"
+b64 = base64.b64encode(p.read_bytes()).decode()
+url = f"data:{mime};base64,{b64}"
+print(json.dumps({
+  "model": os.environ["MODEL"],
+  "messages": [{"role":"user","content":[
+    {"type":"image_url","image_url":{"url": url}},
+    {"type":"text","text": os.environ["TEXT"]},
+  ]}],
+  "max_tokens": 600,
+  "temperature": 0.2,
+}))')
+  curl -sS -H "Content-Type: application/json" \
+    -d "$payload" "http://$HOST:$PORT/v1/chat/completions" \
+    | "$PY" -c 'import sys,json; d=json.load(sys.stdin); print(d["choices"][0]["message"]["content"])'
+}
+
+cmd_status() {
+  if is_running; then
+    echo "running: $(cat "$KIND_FILE") -> $(cat "$MODEL_FILE") (pid $(cat "$PID_FILE"))"
+  else
+    echo "stopped"
+  fi
+}
+
+cmd_models() {
+  printf "%-7s %s\n" "kind" "model"
+  for k in daily code vision gemma; do
+    printf "%-7s %s\n" "$k" "$(model_for "$k")"
+  done
+}
+
+case "${1:-}" in
+  switch)        shift; cmd_switch "$@" ;;
+  prompt)        shift; cmd_prompt "$@" ;;
+  prompt-image)  shift; cmd_prompt_image "$@" ;;
+  status)        cmd_status ;;
+  stop)          stop_server; echo "stopped" ;;
+  models)        cmd_models ;;
+  *)
+    cat <<EOF
+local-llm — MLX subagent dispatcher
+  switch {daily|code|vision|gemma}   load/swap model
+  prompt "<text>"                    chat completion
+  prompt-image <img> "<text>"        vision (after: switch vision|gemma)
+  status                             show what's loaded
+  stop                               kill server
+  models                             list known kinds
+EOF
+    exit 2 ;;
+esac
