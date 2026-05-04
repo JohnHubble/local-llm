@@ -112,13 +112,25 @@ cd local-llm
 ./install.sh
 ```
 
-`install.sh` auto-detects a Python 3.10+ interpreter, creates `./venv`, and installs `mlx-lm`, `mlx-vlm`, `torch`, `torchvision`, `pillow`. Then add the wrapper to your PATH:
+`install.sh` auto-detects a Python 3.10+ interpreter, creates `./venv`, and installs the pinned dependencies from `requirements.txt`. Then add the wrapper to your PATH:
 
 ```bash
 echo 'export PATH="'"$PWD"'/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 local-llm models    # verify
 ```
+
+### Smoke test
+
+Run this once after install to confirm everything works end-to-end (downloads ~2.1 GB on first call):
+
+```bash
+local-llm switch daily
+local-llm prompt "Say OK and nothing else."
+local-llm stop
+```
+
+You should see `OK` (or close to it) in under 30 seconds. If it hangs or errors, see [Troubleshooting](#troubleshooting).
 
 ## Models
 
