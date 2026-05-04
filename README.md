@@ -1,16 +1,84 @@
 # local-llm
 
-A minimal CLI for running small MLX models locally on Apple Silicon Macs as on-demand subagents. One server at a time on `:8080`, swap models with a single command, OpenAI-compatible API under the hood.
+**Run local MLX models as OpenAI-compatible subagents on Apple Silicon.**
 
-Designed to be called by another agent (Claude Code, scripts) to offload mechanical work — bulk text summarization, OCR, code boilerplate — without burning frontier-model tokens. Also fine for direct interactive use.
+One server at a time on `:8080`. Swap models with a single command. OpenAI-compatible API so anything that talks to `gpt-4o` already talks to your local model.
+
+![demo](assets/demo.gif)
+
+## Why this exists
+
+Coding agents like Claude Code are excellent at high-leverage work — architectural judgment, tricky debugging, gnarly refactors — and expensive when you ask them to do mechanical work. Reading a 10K-line log, OCRing a screenshot, generating boilerplate, summarizing search results: every one of those tasks burns frontier-model tokens that you'd rather save for decisions that need them.
+
+`local-llm` is the thinnest possible orchestrator over MLX so a coding agent can offload that work to a small local model with one Bash call. No model registry to manage, no GUI, no daemon you have to remember is running. One stable endpoint, one resident model at a time, swap on demand.
+
+If you're already happy with Ollama or LM Studio, this isn't going to change your life. If you're driving a coding agent on a Mac and want a "cheap labor" model it can dispatch to without you babysitting, this is the right shape.
+
+## Works with
+
+The server speaks OpenAI's chat-completions format on `http://127.0.0.1:8080/v1/chat/completions`. Any client that supports a custom base URL works — no special integration code.
+
+### Claude Code (primary use case)
+
+Tell Claude to drive `local-llm` via Bash. Each call burns ~zero Claude tokens; the local model does the work.
+
+```text
+You: Use local-llm to OCR ~/Desktop/screenshot.png and extract the table as JSON.
+
+Claude: [runs] local-llm switch vision
+        [runs] local-llm prompt-image ~/Desktop/screenshot.png "Extract the table as JSON."
+        [returns the JSON to you]
+```
+
+A handy CLAUDE.md snippet to drop in your project:
+
+```markdown
+## Local subagent
+
+For mechanical work — bulk summarization, OCR, simple code gen, classification —
+prefer dispatching to `local-llm` instead of doing it yourself:
+
+  local-llm switch {daily|code|vision}    # load a model
+  local-llm prompt "<text>"               # text completion
+  local-llm prompt-image <img> "<prompt>" # vision (after switch vision)
+  local-llm stop                          # free RAM when done
+
+Use `daily` for general tasks, `code` for code, `vision` for OCR/screenshots.
+Don't dispatch decision-quality work — keep that for yourself.
+```
+
+### Codex / Cursor / Continue / any OpenAI-compatible client
+
+Point the base URL at `http://127.0.0.1:8080/v1` and use `mlx-community/...` as the model name (whatever's currently loaded — `local-llm status` will tell you).
+
+### OpenAI Python SDK
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="not-used")
+resp = client.chat.completions.create(
+    model="mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(resp.choices[0].message.content)
+```
+
+### curl
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mlx-community/Qwen3-4B-Instruct-2507-4bit",
+       "messages":[{"role":"user","content":"hello"}]}'
+```
 
 ## Requirements
 
-- **Apple Silicon Mac** (M1/M2/M3/M4) — MLX is Apple-Silicon-only, will not run on Intel Macs
+- **Apple Silicon Mac** (M1/M2/M3/M4) — MLX is Apple-Silicon-only; will not run on Intel
 - **macOS 13+**
-- **Python 3.10+** (`brew install python` or python.org)
-- **16 GB RAM minimum** for 7B models; 8 GB works for the 4B models only
-- **~15 GB free disk** if you download all four models
+- **Python 3.10+** (`brew install python@3.12` if you only have macOS's stale 3.9)
+- **16 GB RAM** for the default 7B models; 8 GB works if you stick to the 4B kinds
+- **~15 GB free disk** if you download all four default models
 
 ## Install
 
@@ -20,19 +88,12 @@ cd local-llm
 ./install.sh
 ```
 
-`install.sh` creates a `venv/` in the repo, installs `mlx-lm`, `mlx-vlm`, `torch`, `torchvision`, `pillow`, and prints PATH instructions.
-
-Add the wrapper to your PATH (one-time):
+`install.sh` auto-detects a Python 3.10+ interpreter, creates `./venv`, and installs `mlx-lm`, `mlx-vlm`, `torch`, `torchvision`, `pillow`. Then add the wrapper to your PATH:
 
 ```bash
 echo 'export PATH="'"$PWD"'/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
-```
-
-Verify:
-
-```bash
-local-llm models
+local-llm models    # verify
 ```
 
 ## Models
@@ -43,8 +104,8 @@ Four "kinds" are wired in. Each one auto-downloads from Hugging Face on first `s
 |---|---|---|---|---|---|
 | `daily` | Qwen3-4B-Instruct-2507 (4-bit) | 4 B | 2.1 GB | ~2.5 GB | general chat, summarization, web-search digests |
 | `code` | Qwen2.5-Coder-7B-Instruct (4-bit) | 7 B | 4.0 GB | ~4.5 GB | code generation, refactoring, code explanation |
-| `vision` | Qwen2.5-VL-7B-Instruct (4-bit) | 7 B | 5.3 GB | ~5 GB | OCR, screenshot parsing, structured-data extraction |
-| `gemma` | Gemma 3 4B IT (4-bit) | 4 B | 3.2 GB | ~3 GB | alternate small multimodal — text + vision in one model |
+| `vision` | Qwen2.5-VL-7B-Instruct (4-bit) | 7 B | 5.3 GB | ~5 GB | OCR, screenshot parsing, structured extraction |
+| `gemma` | Gemma 3 4B IT (4-bit) | 4 B | 3.2 GB | ~3 GB | alternate small multimodal — text + vision in one |
 
 Only one is loaded at a time. Swap takes ~5–10 s once the model is cached locally.
 
@@ -79,7 +140,7 @@ Add ~2–4 GB for KV cache at long contexts, and leave at least 8 GB headroom fo
 - **Long context:** Qwen2.5-Coder-32B has 128K context; useful for "read this whole codebase" tasks.
 - **Higher precision instead of bigger params:** swap `*-4bit` for `*-8bit` (where available) on the same model. 8-bit is usually a notable quality bump for the same model — especially on coding tasks. Qwen2.5-Coder-32B-Instruct in 8-bit (~34 GB) is excellent on a 64 GB machine.
 
-**Where to find them:** browse [huggingface.co/mlx-community](https://huggingface.co/mlx-community) — the `mlx-community` org keeps pre-quantized MLX builds of most popular open models. Look for `*-4bit` or `*-8bit` suffixes. Multimodal models (vision, audio) go through `mlx_vlm.server` (already wired in for `vision`/`gemma` kinds); text-only models go through `mlx_lm.server`.
+**Where to find them:** browse [huggingface.co/mlx-community](https://huggingface.co/mlx-community) — the `mlx-community` org keeps pre-quantized MLX builds of most popular open models. Look for `*-4bit` or `*-8bit` suffixes. Multimodal models go through `mlx_vlm.server` (already wired in for `vision`/`gemma` kinds); text-only models go through `mlx_lm.server`.
 
 **How to evaluate which is better for you:**
 
@@ -114,26 +175,6 @@ local-llm prompt-image ~/Desktop/screenshot.png "Extract the table data as JSON.
 local-llm stop
 ```
 
-## Calling from code
-
-The server speaks OpenAI's chat-completions format on `http://127.0.0.1:8080/v1/chat/completions`. Any OpenAI client works — just point the base URL there.
-
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="not-used")
-resp = client.chat.completions.create(
-    model="mlx-community/Qwen3-4B-Instruct-2507-4bit",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-print(resp.choices[0].message.content)
-```
-
-```bash
-curl -sS http://127.0.0.1:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"mlx-community/Qwen3-4B-Instruct-2507-4bit","messages":[{"role":"user","content":"hello"}]}'
-```
-
 ## How it works
 
 `local-llm` is a small bash wrapper around two MLX server modules:
@@ -145,12 +186,42 @@ State (PID, current kind, current model) lives in `/tmp/local-llm.{pid,kind,mode
 
 Both servers expose the same OpenAI-compatible endpoints, so the wrapper's `prompt` command works regardless of which kind is loaded. `prompt-image` adds a base64-encoded `image_url` content block and only works when a multimodal kind is loaded.
 
+## Comparison
+
+| | **local-llm** | Ollama | LM Studio | raw `mlx_lm` |
+|---|---|---|---|---|
+| Apple Silicon native via MLX | ✓ | partial (llama.cpp/Metal) | ✓ (MLX or GGUF) | ✓ |
+| OpenAI-compatible API | ✓ | ✓ | ✓ | ✓ |
+| GUI | — | — | ✓ | — |
+| Multimodal (vision) | ✓ | partial | ✓ | text-only |
+| Single-command swap | `local-llm switch X` | `ollama run X` | UI click | manual restart |
+| One model resident at a time | ✓ enforced | runs many | runs many | one per process |
+| Model registry / community library | small (4 default kinds, edit to add) | huge | huge | — |
+| Setup complexity | one script (~200 lines) | one binary | one app (~hundreds of MB) | venv + you wire it up |
+| Designed for agent subagents | ✓ primary use case | works | works (heavier) | possible but DIY |
+
+`local-llm` is not trying to replace Ollama or LM Studio. If you want a model registry, Ollama is the right pick. If you want a chat UI to play with models, LM Studio is the right pick. If you're driving a coding agent and want it to offload mechanical work to a small local model with minimal ceremony, `local-llm` is what this is for.
+
 ## Choosing a model — when to use which
 
 - **`daily`** — your default. Summarize a long doc, digest a few search-result snippets into an answer, draft a commit message, classify or route. Fast, cheap, accurate enough for non-decision work.
 - **`code`** — when the output is code. Qwen2.5-Coder-7B is materially better at coding than the 4B general models; the size cost is worth it.
 - **`vision`** — for OCR-style tasks or when you need accurate structured extraction from a screenshot. Qwen2.5-VL is the strongest open vision model in this size class.
 - **`gemma`** — alternate small multimodal. Slightly faster than `vision`, slightly chattier on text, less accurate on structured-data extraction. Try it if you want a single 4B model that handles both text and images.
+
+## Roadmap
+
+Believable next steps, in rough priority order:
+
+1. **Streaming responses (SSE)** — `local-llm prompt --stream "..."` will pipe tokens as they arrive instead of buffering the full response. Big latency win for long generations and for agents that show partial output.
+2. **`local-llm bench`** — runs a fixed prompt across each available kind, reports tokens/sec on your hardware, and recommends a tier. Removes guesswork from the "Scaling up" section.
+3. **Config file at `~/.config/local-llm/models.toml`** — add or override kinds without editing `bin/local-llm`. Per-kind defaults for temperature, max tokens, system prompt.
+
+Not on the roadmap (and unlikely to be):
+
+- A GUI. Use LM Studio.
+- A model registry. Use Ollama or browse `huggingface.co/mlx-community` directly.
+- Linux / NVIDIA support. MLX is Apple-Silicon only by design; if you're on Linux, use vLLM or Ollama.
 
 ## Troubleshooting
 
